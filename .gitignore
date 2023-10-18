@@ -31,6 +31,9 @@ models/*
 test-models/
 test-dir/
 
+# Ignore generated images
+images/
+
 release/
 
 # just in case

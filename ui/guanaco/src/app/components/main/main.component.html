@@ -1,0 +1,67 @@
+<div class="container-md container-main">
+  <div class="row header-row">
+    <div class="col-8">
+        <div class="row">
+          <div class="col-12">
+            <p class="header">EZ LocalAI</p>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col-12">
+            <p class="description">
+              Enter text below and press the generate button to create an image!
+            </p>
+          </div>
+        </div>
+    </div>
+    <div class="col-4 col-img" *ngIf="alertType === 'success'">
+      <img 
+        class="img-billmurray"
+        src="https://img.playbuzz.com/image/upload/f_auto,fl_lossy,q_auto/cdn/b2b3a60a-f7de-41d7-83d1-e1f3f0994027/81a21226-6e49-4f1b-bc80-07901f37aeee.jpg" 
+        alt="You got this!"
+      />
+    </div>
+    <div class="col-4 col-img" *ngIf="alertType === 'warning'">
+      <img 
+        class="img-billmurray"
+        src="https://media.giphy.com/media/hCiQVo1dzVwPu/giphy.gif"
+        alt="You got this!"
+      />
+    </div>
+    <div class="col-4 col-img" *ngIf="alertType==='danger'">
+      <img 
+        class="img-billmurray"
+        src="https://media.giphy.com/media/WVYksxODMY4vK/giphy.gif"
+        alt="You got this!"
+      />
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-12 col-prompt">
+      <textarea 
+        [(ngModel)]="prompt"
+        class="text-prompt"
+        placeholder="{{placeholder}}">
+        {{prompt}}
+      </textarea>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-12 col-button" *ngIf="!working">
+      <div class="align-middle">
+        <button type="button" class="btn btn-primary generate" (click)="onGenerateImage()">Generate Image...</button>
+      </div>
+    </div>
+    <div class="col-12 col-progress" *ngIf="working">
+      <p><ngb-progressbar type="success" [striped]="true" [animated]="true" [max]="maxprogress" [value]="progress">generating image...</ngb-progressbar></p>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-12" *ngIf="img && img.length > 0">
+      <div class="container-image">
+        <img src="{{ img }}" />
+      </div>
+    </div>
+  </div>
+</div>
+<app-alert [type]="alertType" [msg]="alertMsg" (dismiss)="onDismissAlert($event)"></app-alert>
