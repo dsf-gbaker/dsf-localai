@@ -1,7 +1,7 @@
 docker compose up -d
 
 # move to ui directory and start the client
-Set-Location ./ui/guanaco
+Set-Location ./ui/ng
 $myargs = 'run prod'
 Start-Process -PassThru npm -ArgumentList $myargs
 
