@@ -4,11 +4,11 @@ GOVET=$(GOCMD) vet
 BINARY_NAME=local-ai
 
 # llama.cpp versions
-GOLLAMA_VERSION?=1676dcd7a139b6cdfbaea5fd67f46dc25d9d8bcf
+GOLLAMA_VERSION?=aeba71ee842819da681ea537e78846dc75949ac0
 
 GOLLAMA_STABLE_VERSION?=50cee7712066d9e38306eccadcfbb44ea87df4b7
 
-CPPLLAMA_VERSION?=24ba3d829e31a6eda3fa1723f692608c2fa3adda
+CPPLLAMA_VERSION?=0a7c980b6f94a049cb804573df2d8092a34df8e4
 
 # gpt4all version
 GPT4ALL_REPO?=https://github.com/nomic-ai/gpt4all
@@ -30,14 +30,8 @@ BERT_VERSION?=6abe312cded14042f6b7c3cd8edf082713334a4d
 # go-piper version
 PIPER_VERSION?=56b8a81b4760a6fbee1a82e62f007ae7e8f010a7
 
-# go-bloomz version
-BLOOMZ_VERSION?=1834e77b83faafe912ad4092ccf7f77937349e2f
-
 # stablediffusion version
 STABLEDIFFUSION_VERSION?=d89260f598afb809279bc72aa0107b4292587632
-
-# Go-ggllm
-GOGGLLM_VERSION?=862477d16eefb0805261c19c9b0d053e3b2b684b
 
 export BUILD_TYPE?=
 export STABLE_BUILD_TYPE?=$(BUILD_TYPE)
@@ -46,6 +40,10 @@ CGO_LDFLAGS?=
 CUDA_LIBPATH?=/usr/local/cuda/lib64/
 GO_TAGS?=
 BUILD_ID?=git
+
+TEST_DIR=/tmp/test
+
+RANDOM := $(shell bash -c 'echo $$RANDOM')
 
 VERSION?=$(shell git describe --always --tags || echo "dev" )
 # go tool nm ./local-ai | grep Commit
@@ -63,6 +61,9 @@ YELLOW := $(shell tput -Txterm setaf 3)
 WHITE  := $(shell tput -Txterm setaf 7)
 CYAN   := $(shell tput -Txterm setaf 6)
 RESET  := $(shell tput -Txterm sgr0)
+
+# Default Docker bridge IP
+E2E_BRIDGE_IP?=172.17.0.1
 
 ifndef UNAME_S
 UNAME_S := $(shell uname -s)
@@ -122,7 +123,13 @@ ifeq ($(findstring tts,$(GO_TAGS)),tts)
 	OPTIONAL_GRPC+=backend-assets/grpc/piper
 endif
 
-GRPC_BACKENDS?=backend-assets/grpc/langchain-huggingface backend-assets/grpc/falcon-ggml backend-assets/grpc/bert-embeddings backend-assets/grpc/falcon backend-assets/grpc/bloomz backend-assets/grpc/llama backend-assets/grpc/llama-cpp backend-assets/grpc/llama-stable backend-assets/grpc/gpt4all backend-assets/grpc/dolly backend-assets/grpc/gpt2 backend-assets/grpc/gptj backend-assets/grpc/gptneox backend-assets/grpc/mpt backend-assets/grpc/replit backend-assets/grpc/starcoder backend-assets/grpc/rwkv backend-assets/grpc/whisper $(OPTIONAL_GRPC)
+ALL_GRPC_BACKENDS=backend-assets/grpc/langchain-huggingface backend-assets/grpc/falcon-ggml backend-assets/grpc/bert-embeddings backend-assets/grpc/llama backend-assets/grpc/llama-cpp backend-assets/grpc/llama-stable backend-assets/grpc/gpt4all backend-assets/grpc/dolly backend-assets/grpc/gpt2 backend-assets/grpc/gptj backend-assets/grpc/gptneox backend-assets/grpc/mpt backend-assets/grpc/replit backend-assets/grpc/starcoder backend-assets/grpc/rwkv backend-assets/grpc/whisper $(OPTIONAL_GRPC)
+GRPC_BACKENDS?=$(ALL_GRPC_BACKENDS) $(OPTIONAL_GRPC)
+
+# If empty, then we build all
+ifeq ($(GRPC_BACKENDS),)
+	GRPC_BACKENDS=$(ALL_GRPC_BACKENDS)
+endif
 
 .PHONY: all test build vendor
 
@@ -132,14 +139,6 @@ all: help
 gpt4all:
 	git clone --recurse-submodules $(GPT4ALL_REPO) gpt4all
 	cd gpt4all && git checkout -b build $(GPT4ALL_VERSION) && git submodule update --init --recursive --depth 1
-
-## go-ggllm
-go-ggllm:
-	git clone --recurse-submodules https://github.com/mudler/go-ggllm.cpp go-ggllm
-	cd go-ggllm && git checkout -b build $(GOGGLLM_VERSION) && git submodule update --init --recursive --depth 1
-
-go-ggllm/libggllm.a: go-ggllm
-	$(MAKE) -C go-ggllm BUILD_TYPE=$(BUILD_TYPE) libggllm.a
 
 ## go-piper
 go-piper:
@@ -166,14 +165,6 @@ go-rwkv:
 
 go-rwkv/librwkv.a: go-rwkv
 	cd go-rwkv && cd rwkv.cpp &&	cmake . -DRWKV_BUILD_SHARED_LIBRARY=OFF &&	cmake --build . && 	cp librwkv.a ..
-
-## bloomz
-bloomz:
-	git clone --recurse-submodules https://github.com/go-skynet/bloomz.cpp bloomz
-	cd bloomz && git checkout -b build $(BLOOMZ_VERSION) && git submodule update --init --recursive --depth 1
-
-bloomz/libbloomz.a: bloomz
-	cd bloomz && make libbloomz.a
 
 go-bert/libgobert.a: go-bert
 	$(MAKE) -C go-bert libgobert.a
@@ -228,7 +219,7 @@ go-llama-stable/libbinding.a: go-llama-stable
 go-piper/libpiper_binding.a: go-piper
 	$(MAKE) -C go-piper libpiper_binding.a example/main
 
-get-sources: go-llama go-llama-stable go-ggllm go-ggml-transformers gpt4all go-piper go-rwkv whisper.cpp go-bert bloomz go-stable-diffusion
+get-sources: go-llama go-llama-stable go-ggml-transformers gpt4all go-piper go-rwkv whisper.cpp go-bert go-stable-diffusion
 	touch $@
 
 replace:
@@ -237,10 +228,8 @@ replace:
 	$(GOCMD) mod edit -replace github.com/donomii/go-rwkv.cpp=$(shell pwd)/go-rwkv
 	$(GOCMD) mod edit -replace github.com/ggerganov/whisper.cpp=$(shell pwd)/whisper.cpp
 	$(GOCMD) mod edit -replace github.com/go-skynet/go-bert.cpp=$(shell pwd)/go-bert
-	$(GOCMD) mod edit -replace github.com/go-skynet/bloomz.cpp=$(shell pwd)/bloomz
 	$(GOCMD) mod edit -replace github.com/mudler/go-stable-diffusion=$(shell pwd)/go-stable-diffusion
 	$(GOCMD) mod edit -replace github.com/mudler/go-piper=$(shell pwd)/go-piper
-	$(GOCMD) mod edit -replace github.com/mudler/go-ggllm.cpp=$(shell pwd)/go-ggllm
 
 prepare-sources: get-sources replace
 	$(GOCMD) mod download
@@ -256,9 +245,7 @@ rebuild: ## Rebuilds the project
 	$(MAKE) -C whisper.cpp clean
 	$(MAKE) -C go-stable-diffusion clean
 	$(MAKE) -C go-bert clean
-	$(MAKE) -C bloomz clean
 	$(MAKE) -C go-piper clean
-	$(MAKE) -C go-ggllm clean
 	$(MAKE) build
 
 prepare: prepare-sources $(OPTIONAL_TARGETS)
@@ -276,12 +263,13 @@ clean: ## Remove build related file
 	rm -rf ./backend-assets
 	rm -rf ./go-rwkv
 	rm -rf ./go-bert
-	rm -rf ./bloomz
 	rm -rf ./whisper.cpp
 	rm -rf ./go-piper
-	rm -rf ./go-ggllm
 	rm -rf $(BINARY_NAME)
 	rm -rf release/
+	rm -rf ./backend/cpp/grpc/grpc_repo
+	rm -rf ./backend/cpp/grpc/build
+	rm -rf ./backend/cpp/grpc/installed_packages
 	$(MAKE) -C backend/cpp/llama clean
 
 ## Build:
@@ -305,12 +293,12 @@ run: prepare ## run local-ai
 test-models/testmodel:
 	mkdir test-models
 	mkdir test-dir
-	wget https://huggingface.co/nnakasato/ggml-model-test/resolve/main/ggml-model-q4.bin -O test-models/testmodel
-	wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin -O test-models/whisper-en
-	wget https://huggingface.co/skeskinen/ggml/resolve/main/all-MiniLM-L6-v2/ggml-model-q4_0.bin -O test-models/bert
-	wget https://cdn.openai.com/whisper/draft-20220913a/micro-machines.wav -O test-dir/audio.wav
-	wget https://huggingface.co/mudler/rwkv-4-raven-1.5B-ggml/resolve/main/RWKV-4-Raven-1B5-v11-Eng99%2525-Other1%2525-20230425-ctx4096_Q4_0.bin -O test-models/rwkv
-	wget https://raw.githubusercontent.com/saharNooby/rwkv.cpp/5eb8f09c146ea8124633ab041d9ea0b1f1db4459/rwkv/20B_tokenizer.json -O test-models/rwkv.tokenizer.json
+	wget -q https://huggingface.co/nnakasato/ggml-model-test/resolve/main/ggml-model-q4.bin -O test-models/testmodel
+	wget -q https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin -O test-models/whisper-en
+	wget -q https://huggingface.co/mudler/all-MiniLM-L6-v2/resolve/main/ggml-model-q4_0.bin -O test-models/bert
+	wget -q https://cdn.openai.com/whisper/draft-20220913a/micro-machines.wav -O test-dir/audio.wav
+	wget -q https://huggingface.co/mudler/rwkv-4-raven-1.5B-ggml/resolve/main/RWKV-4-Raven-1B5-v11-Eng99%2525-Other1%2525-20230425-ctx4096_Q4_0.bin -O test-models/rwkv
+	wget -q https://raw.githubusercontent.com/saharNooby/rwkv.cpp/5eb8f09c146ea8124633ab041d9ea0b1f1db4459/rwkv/20B_tokenizer.json -O test-models/rwkv.tokenizer.json
 	cp tests/models_fixtures/* test-models
 
 prepare-test: grpcs
@@ -321,13 +309,33 @@ test: prepare test-models/testmodel grpcs
 	@echo 'Running tests'
 	export GO_TAGS="tts stablediffusion"
 	$(MAKE) prepare-test
-	HUGGINGFACE_GRPC=$(abspath ./)/extra/grpc/huggingface/huggingface.py TEST_DIR=$(abspath ./)/test-dir/ FIXTURES=$(abspath ./)/tests/fixtures CONFIG_FILE=$(abspath ./)/test-models/config.yaml MODELS_PATH=$(abspath ./)/test-models \
-	$(GOCMD) run github.com/onsi/ginkgo/v2/ginkgo --label-filter="!gpt4all && !llama && !llama-gguf" --flake-attempts 5 -v -r ./api ./pkg
+	HUGGINGFACE_GRPC=$(abspath ./)/extra/grpc/huggingface/run.sh TEST_DIR=$(abspath ./)/test-dir/ FIXTURES=$(abspath ./)/tests/fixtures CONFIG_FILE=$(abspath ./)/test-models/config.yaml MODELS_PATH=$(abspath ./)/test-models \
+	$(GOCMD) run github.com/onsi/ginkgo/v2/ginkgo --label-filter="!gpt4all && !llama && !llama-gguf"  --flake-attempts 5 --fail-fast -v -r ./api ./pkg
 	$(MAKE) test-gpt4all
 	$(MAKE) test-llama
 	$(MAKE) test-llama-gguf
 	$(MAKE) test-tts
 	$(MAKE) test-stablediffusion
+
+prepare-e2e:
+	mkdir -p $(TEST_DIR)
+	cp -rfv $(abspath ./tests/e2e-fixtures)/gpu.yaml $(TEST_DIR)/gpu.yaml
+	test -e $(TEST_DIR)/ggllm-test-model.bin || wget -q https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF/resolve/main/codellama-7b-instruct.Q2_K.gguf -O $(TEST_DIR)/ggllm-test-model.bin
+	docker build --build-arg BUILD_GRPC=true --build-arg GRPC_BACKENDS="$(GRPC_BACKENDS)" --build-arg IMAGE_TYPE=core --build-arg BUILD_TYPE=$(BUILD_TYPE) --build-arg CUDA_MAJOR_VERSION=11 --build-arg CUDA_MINOR_VERSION=7 --build-arg FFMPEG=true -t localai-tests .
+
+run-e2e-image:
+	ls -liah $(abspath ./tests/e2e-fixtures)
+	docker run -p 5390:8080 -e MODELS_PATH=/models -e THREADS=1 -e DEBUG=true -d --rm -v $(TEST_DIR):/models --gpus all --name e2e-tests-$(RANDOM) localai-tests
+
+test-e2e:
+	@echo 'Running e2e tests'
+	BUILD_TYPE=$(BUILD_TYPE) \
+	LOCALAI_API=http://$(E2E_BRIDGE_IP):5390/v1 \
+	$(GOCMD) run github.com/onsi/ginkgo/v2/ginkgo --flake-attempts 5 -v -r ./tests/e2e
+
+teardown-e2e:
+	rm -rf $(TEST_DIR) || true
+	docker stop $$(docker ps -q --filter ancestor=localai-tests)
 
 test-gpt4all: prepare-test
 	TEST_DIR=$(abspath ./)/test-dir/ FIXTURES=$(abspath ./)/tests/fixtures CONFIG_FILE=$(abspath ./)/test-models/config.yaml MODELS_PATH=$(abspath ./)/test-models \
@@ -381,13 +389,19 @@ protogen-python:
 	python3 -m grpc_tools.protoc -Ipkg/grpc/proto/ --python_out=extra/grpc/vllm/ --grpc_python_out=extra/grpc/vllm/ pkg/grpc/proto/backend.proto
 
 ## GRPC
+# Note: it is duplicated in the Dockerfile
+prepare-extra-conda-environments:
+	$(MAKE) -C extra/grpc/autogptq
+	$(MAKE) -C extra/grpc/bark
+	$(MAKE) -C extra/grpc/diffusers
+	$(MAKE) -C extra/grpc/vllm
+	$(MAKE) -C extra/grpc/huggingface
+	$(MAKE) -C extra/grpc/vall-e-x
+	$(MAKE) -C extra/grpc/exllama
+
 
 backend-assets/grpc:
 	mkdir -p backend-assets/grpc
-
-backend-assets/grpc/falcon: backend-assets/grpc go-ggllm/libggllm.a
-	CGO_LDFLAGS="$(CGO_LDFLAGS)" C_INCLUDE_PATH=$(shell pwd)/go-ggllm LIBRARY_PATH=$(shell pwd)/go-ggllm \
-	$(GOCMD) build -ldflags "$(LD_FLAGS)" -tags "$(GO_TAGS)" -o backend-assets/grpc/falcon ./cmd/grpc/falcon/
 
 backend-assets/grpc/llama: backend-assets/grpc go-llama/libbinding.a
 	$(GOCMD) mod edit -replace github.com/go-skynet/go-llama.cpp=$(shell pwd)/go-llama
@@ -398,9 +412,30 @@ ifeq ($(BUILD_TYPE),metal)
 	cp go-llama/build/bin/ggml-metal.metal backend-assets/grpc/
 endif
 
-backend/cpp/llama/grpc-server:
-	LLAMA_VERSION=$(CPPLLAMA_VERSION) $(MAKE) -C backend/cpp/llama grpc-server
+## BACKEND CPP LLAMA START
+# Sets the variables in case it has to build the gRPC locally.
+INSTALLED_PACKAGES=$(CURDIR)/backend/cpp/grpc/installed_packages
+INSTALLED_LIB_CMAKE=$(INSTALLED_PACKAGES)/lib/cmake
+ADDED_CMAKE_ARGS=-Dabsl_DIR=${INSTALLED_LIB_CMAKE}/absl \
+                 -DProtobuf_DIR=${INSTALLED_LIB_CMAKE}/protobuf \
+                 -Dutf8_range_DIR=${INSTALLED_LIB_CMAKE}/utf8_range \
+                 -DgRPC_DIR=${INSTALLED_LIB_CMAKE}/grpc \
+                 -DCMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES=${INSTALLED_PACKAGES}/include
 
+backend/cpp/llama/grpc-server:
+ifdef BUILD_GRPC_FOR_BACKEND_LLAMA
+	backend/cpp/grpc/script/build_grpc.sh ${INSTALLED_PACKAGES}
+	export _PROTOBUF_PROTOC=${INSTALLED_PACKAGES}/bin/proto && \
+	export _GRPC_CPP_PLUGIN_EXECUTABLE=${INSTALLED_PACKAGES}/bin/grpc_cpp_plugin && \
+	export PATH=${PATH}:${INSTALLED_PACKAGES}/bin && \
+	CMAKE_ARGS="${ADDED_CMAKE_ARGS}" LLAMA_VERSION=$(CPPLLAMA_VERSION) $(MAKE) -C backend/cpp/llama grpc-server 
+else
+	echo "BUILD_GRPC_FOR_BACKEND_LLAMA is not defined."
+	LLAMA_VERSION=$(CPPLLAMA_VERSION) $(MAKE) -C backend/cpp/llama grpc-server			
+endif
+## BACKEND CPP LLAMA END
+		
+##
 backend-assets/grpc/llama-cpp: backend-assets/grpc backend/cpp/llama/grpc-server
 	cp -rfv backend/cpp/llama/grpc-server backend-assets/grpc/llama-cpp
 # TODO: every binary should have its own folder instead, so can have different metal implementations
@@ -452,10 +487,6 @@ backend-assets/grpc/starcoder: backend-assets/grpc go-ggml-transformers/libtrans
 backend-assets/grpc/rwkv: backend-assets/grpc go-rwkv/librwkv.a
 	CGO_LDFLAGS="$(CGO_LDFLAGS)" C_INCLUDE_PATH=$(shell pwd)/go-rwkv LIBRARY_PATH=$(shell pwd)/go-rwkv \
 	$(GOCMD) build -ldflags "$(LD_FLAGS)" -tags "$(GO_TAGS)" -o backend-assets/grpc/rwkv ./cmd/grpc/rwkv/
-
-backend-assets/grpc/bloomz: backend-assets/grpc bloomz/libbloomz.a
-	CGO_LDFLAGS="$(CGO_LDFLAGS)" C_INCLUDE_PATH=$(shell pwd)/bloomz LIBRARY_PATH=$(shell pwd)/bloomz \
-	$(GOCMD) build -ldflags "$(LD_FLAGS)" -tags "$(GO_TAGS)" -o backend-assets/grpc/bloomz ./cmd/grpc/bloomz/
 
 backend-assets/grpc/bert-embeddings: backend-assets/grpc go-bert/libgobert.a
 	CGO_LDFLAGS="$(CGO_LDFLAGS)" C_INCLUDE_PATH=$(shell pwd)/go-bert LIBRARY_PATH=$(shell pwd)/go-bert \
